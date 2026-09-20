@@ -181,8 +181,32 @@ class _WheatManagementPageState extends State<WheatManagementPage> {
     final farmRepository = FarmRepository();
     final partyRepository = PartyRepository();
 
-    final List<Map<String, dynamic>> loadedTransactions = repository
-        .getRawTransactions();
+    // Local storage pehle load hota hai (local-only records + fallback).
+    final List<Map<String, dynamic>> loadedTransactions = List.of(
+      repository.getRawTransactions(),
+    );
+
+    // Backend API se transactions load karein (GET /api/wheat).
+    // Agar API fail ho jaye to sirf local data dikhega, page crash nahi hoga.
+    try {
+      final apiTransactions = await repository.getTransactionsFromApi().timeout(
+        const Duration(seconds: 10),
+      );
+
+      debugPrint('Wheat API se ${apiTransactions.length} transactions aaye');
+
+      // Model.toJson() ki keys ('type', 'total', 'totalAmount', 'partyId' ...)
+      // bilkul waisi hain jo ye page Map mein expect karta hai.
+      final apiMaps = apiTransactions.map((item) => item.toJson()).toList();
+      final apiIds = apiMaps.map((item) => item['id']?.toString()).toSet();
+
+      // Same id wala local record ho to API wala use hoga (duplicate nahi).
+      loadedTransactions
+        ..removeWhere((item) => apiIds.contains(item['id']?.toString()))
+        ..addAll(apiMaps);
+    } catch (e, st) {
+      debugPrint('Wheat API load ERROR: $e\n$st');
+    }
 
     final List<Map<String, dynamic>> loadedProduction = [];
 

@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
-import '../models/account_model.dart';
 
+import '../models/account_model.dart';
 import '../repositories/account_repository.dart';
 import '../widgets/responsive_card_row.dart';
 
@@ -13,11 +13,18 @@ class AccountsManagementPage extends StatefulWidget {
 
 class _AccountsManagementPageState extends State<AccountsManagementPage> {
   // =====================================================
+  // REPOSITORY
+  // =====================================================
+
+  final AccountRepository repository = AccountRepository();
+
+  // =====================================================
   // DATA
   // =====================================================
 
   final List<Map<String, dynamic>> transactions = [];
   final List<AccountModel> accounts = [];
+
   AccountModel? selectedAccount;
 
   // =====================================================
@@ -33,10 +40,11 @@ class _AccountsManagementPageState extends State<AccountsManagementPage> {
   // =====================================================
 
   String transactionType = 'Income';
-
   String category = 'Other';
 
   bool isLoading = true;
+  bool isTransactionLoading = false;
+  bool isSavingTransaction = false;
 
   // =====================================================
   // CATEGORY LIST
@@ -68,7 +76,7 @@ class _AccountsManagementPageState extends State<AccountsManagementPage> {
     double total = 0;
 
     for (final transaction in transactions) {
-      if (transaction['type'] == 'Income') {
+      if (transaction['type']?.toString() == 'Income') {
         total += _toDouble(transaction['amount']);
       }
     }
@@ -84,7 +92,7 @@ class _AccountsManagementPageState extends State<AccountsManagementPage> {
     double total = 0;
 
     for (final transaction in transactions) {
-      if (transaction['type'] == 'Expense') {
+      if (transaction['type']?.toString() == 'Expense') {
         total += _toDouble(transaction['amount']);
       }
     }
@@ -93,7 +101,7 @@ class _AccountsManagementPageState extends State<AccountsManagementPage> {
   }
 
   // =====================================================
-  // NET BALANCE
+  // NET TRANSACTION BALANCE
   // =====================================================
 
   double get netBalance {
@@ -134,36 +142,216 @@ class _AccountsManagementPageState extends State<AccountsManagementPage> {
   }
 
   // =====================================================
-  // LOAD DATA
+  // LOAD ACCOUNTS + FIRST ACCOUNT TRANSACTIONS
   // =====================================================
 
   Future<void> loadData() async {
-    final loadedTransactions = AccountRepository().getRawTransactions();
-    final loadedAccounts = await AccountRepository().getAccountsFromApi();
+    debugPrint('========== ACCOUNTS LOAD START ==========');
 
-    if (!mounted) {
+    if (mounted) {
+      setState(() {
+        isLoading = true;
+      });
+    }
+
+    try {
+      debugPrint('Calling GET /accounts...');
+
+      final loadedAccounts = await repository.getAccountsFromApi();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Flutter API: ${loadedAccounts.length} account(s): '
+              '${loadedAccounts.map((e) => e.name).join(', ')}',
+            ),
+            duration: const Duration(seconds: 5),
+          ),
+        );
+      }
+
+      debugPrint('GET /accounts completed');
+      debugPrint('API ACCOUNTS COUNT: ${loadedAccounts.length}');
+      debugPrint('API ACCOUNTS: ${loadedAccounts.map((e) => e.name).toList()}');
+
+      if (!mounted) {
+        debugPrint('Widget is no longer mounted.');
+        return;
+      }
+
+      accounts
+        ..clear()
+        ..addAll(loadedAccounts);
+
+      debugPrint('Accounts added to UI: ${accounts.length}');
+
+      if (accounts.isEmpty) {
+        setState(() {
+          selectedAccount = null;
+          transactions.clear();
+          isLoading = false;
+        });
+
+        debugPrint('NO ACCOUNTS FOUND');
+        return;
+      }
+
+      selectedAccount = accounts.first;
+
+      debugPrint(
+        'Selected account: ${selectedAccount!.name} '
+        '(${selectedAccount!.id})',
+      );
+
+      await loadTransactionsForSelectedAccount();
+
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        isLoading = false;
+      });
+
+      debugPrint('========== ACCOUNTS LOAD COMPLETE ==========');
+    } catch (error, stackTrace) {
+      debugPrint('========== ACCOUNTS LOAD ERROR ==========');
+      debugPrint('ERROR: $error');
+      debugPrint('STACK: $stackTrace');
+
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        isLoading = false;
+        transactions.clear();
+      });
+
+      _showErrorSnackBar('Failed to load accounts: ${_cleanError(error)}');
+    }
+  }
+
+  Future<void> loadTransactionsForSelectedAccount() async {
+    if (selectedAccount == null) {
+      transactions.clear();
+      return;
+    }
+
+    if (mounted) {
+      setState(() {
+        isTransactionLoading = true;
+      });
+    }
+
+    try {
+      final loadedTransactions = await repository.getAccountTransactionsFromApi(
+        selectedAccount!.id,
+      );
+
+      if (!mounted) return;
+
+      setState(() {
+        transactions
+          ..clear()
+          ..addAll(loadedTransactions);
+        isTransactionLoading = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+
+      setState(() {
+        transactions.clear();
+        isTransactionLoading = false;
+      });
+
+      _showErrorSnackBar('Failed to load transactions: ${_cleanError(error)}');
+    }
+  }
+
+  // =====================================================
+  // REFRESH ACCOUNTS FROM API
+  // =====================================================
+
+  Future<void> refreshAccounts({bool reloadTransactions = true}) async {
+    try {
+      final selectedId = selectedAccount?.id;
+
+      final loadedAccounts = await repository.getAccountsFromApi();
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Flutter API: ${loadedAccounts.length} account(s): '
+              '${loadedAccounts.map((e) => e.name).join(', ')}',
+            ),
+            duration: const Duration(seconds: 5),
+          ),
+        );
+      }
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        accounts
+          ..clear()
+          ..addAll(loadedAccounts);
+
+        if (accounts.isEmpty) {
+          selectedAccount = null;
+        } else if (selectedId != null) {
+          final matchingAccount = accounts.where(
+            (account) => account.id == selectedId,
+          );
+
+          if (matchingAccount.isNotEmpty) {
+            selectedAccount = matchingAccount.first;
+          } else {
+            selectedAccount = accounts.first;
+          }
+        } else {
+          selectedAccount = accounts.first;
+        }
+      });
+
+      if (reloadTransactions) {
+        await loadTransactionsForSelectedAccount();
+      }
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+
+      _showErrorSnackBar('Failed to refresh accounts: ${_cleanError(error)}');
+    }
+  }
+
+  // =====================================================
+  // ACCOUNT SELECTION
+  // =====================================================
+
+  Future<void> changeSelectedAccount(String accountId) async {
+    AccountModel? newAccount;
+
+    for (final account in accounts) {
+      if (account.id == accountId) {
+        newAccount = account;
+        break;
+      }
+    }
+
+    if (newAccount == null) {
       return;
     }
 
     setState(() {
-      accounts.clear();
-      accounts.addAll(loadedAccounts);
-
-      if (accounts.isNotEmpty) {
-        selectedAccount = accounts.first;
-      }
+      selectedAccount = newAccount;
       transactions.clear();
-      transactions.addAll(loadedTransactions);
-      isLoading = false;
     });
-  }
 
-  // =====================================================
-  // SAVE DATA
-  // =====================================================
-
-  Future<void> saveData() async {
-    await AccountRepository().saveRawTransactions(transactions);
+    await loadTransactionsForSelectedAccount();
   }
 
   // =====================================================
@@ -171,10 +359,15 @@ class _AccountsManagementPageState extends State<AccountsManagementPage> {
   // =====================================================
 
   Future<void> addTransaction() async {
+    final account = selectedAccount;
+
+    if (account == null) {
+      _showErrorSnackBar('Please select an account first.');
+      return;
+    }
+
     final amountText = amountController.text.trim();
-
     final amount = double.tryParse(amountText);
-
     final note = noteController.text.trim();
 
     // ===================================================
@@ -182,48 +375,70 @@ class _AccountsManagementPageState extends State<AccountsManagementPage> {
     // ===================================================
 
     if (amount == null || amount <= 0) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Please enter a valid amount'),
-          backgroundColor: Colors.red,
-        ),
-      );
-
+      _showErrorSnackBar('Please enter a valid amount.');
       return;
     }
 
-    // ===================================================
-    // CREATE TRANSACTION
-    // ===================================================
-
-    final transaction = <String, dynamic>{
-      'id': DateTime.now().millisecondsSinceEpoch.toString(),
-      'type': transactionType,
-      'category': category,
-      'amount': amount,
-      'note': note,
-      'date': DateTime.now().toIso8601String(),
-    };
+    if (isSavingTransaction) {
+      return;
+    }
 
     setState(() {
-      transactions.insert(0, transaction);
+      isSavingTransaction = true;
     });
 
-    await saveData();
+    try {
+      // =================================================
+      // CREATE TRANSACTION THROUGH API
+      // =================================================
 
-    amountController.clear();
-    noteController.clear();
+      await repository.createAccountTransactionApi(
+        accountId: account.id,
+        date: DateTime.now(),
+        type: transactionType,
+        amount: amount,
+        category: category,
+        note: note,
+      );
 
-    if (!mounted) {
-      return;
+      // =================================================
+      // CLEAR INPUTS
+      // =================================================
+
+      amountController.clear();
+      noteController.clear();
+
+      // =================================================
+      // REFRESH ACCOUNT + TRANSACTIONS FROM API
+      // =================================================
+
+      await refreshAccounts(reloadTransactions: true);
+
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        isSavingTransaction = false;
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('$transactionType added successfully'),
+          backgroundColor: Colors.green,
+        ),
+      );
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        isSavingTransaction = false;
+      });
+
+      _showErrorSnackBar('Failed to add transaction: ${_cleanError(error)}');
     }
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('$transactionType added successfully'),
-        backgroundColor: Colors.green,
-      ),
-    );
   }
 
   // =====================================================
@@ -231,7 +446,18 @@ class _AccountsManagementPageState extends State<AccountsManagementPage> {
   // =====================================================
 
   Future<void> deleteTransaction(int index) async {
+    if (index < 0 || index >= filteredTransactions.length) {
+      return;
+    }
+
     final transaction = filteredTransactions[index];
+
+    final transactionId = transaction['id']?.toString();
+
+    if (transactionId == null || transactionId.isEmpty) {
+      _showErrorSnackBar('Invalid transaction ID.');
+      return;
+    }
 
     final type = transaction['type']?.toString() ?? '';
 
@@ -272,25 +498,54 @@ class _AccountsManagementPageState extends State<AccountsManagementPage> {
       return;
     }
 
-    final originalIndex = transactions.indexOf(transaction);
+    final account = selectedAccount;
 
-    if (originalIndex == -1) {
+    if (account == null) {
+      _showErrorSnackBar('Please select an account first.');
       return;
     }
 
     setState(() {
-      transactions.removeAt(originalIndex);
+      isTransactionLoading = true;
     });
 
-    await saveData();
+    try {
+      // =================================================
+      // DELETE THROUGH API
+      // =================================================
 
-    if (!mounted) {
-      return;
+      await repository.deleteAccountTransactionApi(
+        accountId: account.id,
+        transactionId: transactionId,
+      );
+
+      // =================================================
+      // REFRESH ACCOUNT + TRANSACTIONS
+      // =================================================
+
+      await refreshAccounts(reloadTransactions: true);
+
+      if (!mounted) {
+        return;
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Transaction deleted successfully'),
+          backgroundColor: Colors.green,
+        ),
+      );
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        isTransactionLoading = false;
+      });
+
+      _showErrorSnackBar('Failed to delete transaction: ${_cleanError(error)}');
     }
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Transaction deleted successfully')),
-    );
   }
 
   // =====================================================
@@ -309,14 +564,20 @@ class _AccountsManagementPageState extends State<AccountsManagementPage> {
 
       final category = transaction['category']?.toString().toLowerCase() ?? '';
 
-      final note = transaction['note']?.toString().toLowerCase() ?? '';
+      final note =
+          transaction['note']?.toString().toLowerCase() ??
+          transaction['description']?.toString().toLowerCase() ??
+          '';
 
       final amount = transaction['amount']?.toString().toLowerCase() ?? '';
+
+      final date = transaction['date']?.toString().toLowerCase() ?? '';
 
       return type.contains(query) ||
           category.contains(query) ||
           note.contains(query) ||
-          amount.contains(query);
+          amount.contains(query) ||
+          date.contains(query);
     }).toList();
   }
 
@@ -330,7 +591,7 @@ class _AccountsManagementPageState extends State<AccountsManagementPage> {
     }
 
     try {
-      final date = DateTime.parse(value.toString());
+      final date = DateTime.parse(value.toString()).toLocal();
 
       final day = date.day.toString().padLeft(2, '0');
 
@@ -361,6 +622,34 @@ class _AccountsManagementPageState extends State<AccountsManagementPage> {
   }
 
   // =====================================================
+  // ERROR MESSAGE
+  // =====================================================
+
+  String _cleanError(Object error) {
+    final message = error.toString();
+
+    if (message.startsWith('Exception: ')) {
+      return message.substring('Exception: '.length);
+    }
+
+    return message;
+  }
+
+  // =====================================================
+  // ERROR SNACKBAR
+  // =====================================================
+
+  void _showErrorSnackBar(String message) {
+    if (!mounted) {
+      return;
+    }
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message), backgroundColor: Colors.red),
+    );
+  }
+
+  // =====================================================
   // SUMMARY CARD
   // =====================================================
 
@@ -380,9 +669,7 @@ class _AccountsManagementPageState extends State<AccountsManagementPage> {
               backgroundColor: color.withValues(alpha: 0.12),
               child: Icon(icon, color: color),
             ),
-
             const SizedBox(width: 12),
-
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -395,9 +682,7 @@ class _AccountsManagementPageState extends State<AccountsManagementPage> {
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(color: Colors.grey),
                   ),
-
                   const SizedBox(height: 6),
-
                   Text(
                     value,
                     maxLines: 1,
@@ -423,9 +708,12 @@ class _AccountsManagementPageState extends State<AccountsManagementPage> {
   Widget transactionCard(Map<String, dynamic> transaction, int index) {
     final type = transaction['type']?.toString() ?? '';
 
-    final category = transaction['category']?.toString() ?? 'Other';
+    final transactionCategory = transaction['category']?.toString() ?? 'Other';
 
-    final note = transaction['note']?.toString() ?? '';
+    final note =
+        transaction['note']?.toString() ??
+        transaction['description']?.toString() ??
+        '';
 
     final amount = _toDouble(transaction['amount']);
 
@@ -456,7 +744,7 @@ class _AccountsManagementPageState extends State<AccountsManagementPage> {
         // TITLE
         // =================================================
         title: Text(
-          category,
+          transactionCategory,
           style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
         ),
 
@@ -469,9 +757,7 @@ class _AccountsManagementPageState extends State<AccountsManagementPage> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(note.isEmpty ? 'No note' : note),
-
               const SizedBox(height: 3),
-
               Text(
                 date,
                 style: const TextStyle(color: Colors.grey, fontSize: 12),
@@ -481,7 +767,7 @@ class _AccountsManagementPageState extends State<AccountsManagementPage> {
         ),
 
         // =================================================
-        // AMOUNT
+        // AMOUNT + DELETE
         // =================================================
         trailing: Row(
           mainAxisSize: MainAxisSize.min,
@@ -494,14 +780,14 @@ class _AccountsManagementPageState extends State<AccountsManagementPage> {
                 color: isIncome ? Colors.green : Colors.red,
               ),
             ),
-
             const SizedBox(width: 8),
-
             IconButton(
               tooltip: 'Delete',
-              onPressed: () {
-                deleteTransaction(index);
-              },
+              onPressed: isTransactionLoading
+                  ? null
+                  : () {
+                      deleteTransaction(index);
+                    },
               icon: const Icon(Icons.delete, color: Colors.red),
             ),
           ],
@@ -552,6 +838,7 @@ class _AccountsManagementPageState extends State<AccountsManagementPage> {
                   ),
 
                   const SizedBox(height: 25),
+
                   // =================================================
                   // ACCOUNT SELECTION
                   // =================================================
@@ -560,32 +847,67 @@ class _AccountsManagementPageState extends State<AccountsManagementPage> {
                       elevation: 2,
                       child: Padding(
                         padding: const EdgeInsets.all(16),
+
                         child: DropdownButtonFormField<String>(
                           initialValue: selectedAccount?.id,
+
                           decoration: const InputDecoration(
                             labelText: 'Select Account',
                             border: OutlineInputBorder(),
                             prefixIcon: Icon(Icons.account_balance_wallet),
                           ),
+
                           items: accounts.map((account) {
                             return DropdownMenuItem<String>(
                               value: account.id,
                               child: Text(
-                                '${account.name} - Rs. ${account.currentBalance.toStringAsFixed(0)}',
+                                '${account.name} - Rs. '
+                                '${account.currentBalance.toStringAsFixed(0)}',
                               ),
                             );
                           }).toList(),
-                          onChanged: (value) {
-                            if (value == null) {
-                              return;
-                            }
 
-                            setState(() {
-                              selectedAccount = accounts.firstWhere(
-                                (account) => account.id == value,
-                              );
-                            });
-                          },
+                          onChanged: isTransactionLoading
+                              ? null
+                              : (value) async {
+                                  if (value == null) {
+                                    return;
+                                  }
+
+                                  await changeSelectedAccount(value);
+                                },
+                        ),
+                      ),
+                    ),
+
+                  if (accounts.isEmpty)
+                    Card(
+                      child: SizedBox(
+                        width: double.infinity,
+                        height: 130,
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            const Icon(
+                              Icons.account_balance_wallet_outlined,
+                              size: 45,
+                              color: Colors.grey,
+                            ),
+                            const SizedBox(height: 10),
+                            const Text(
+                              'No accounts available',
+                              style: TextStyle(
+                                fontSize: 17,
+                                color: Colors.grey,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            TextButton.icon(
+                              onPressed: loadData,
+                              icon: const Icon(Icons.refresh),
+                              label: const Text('Refresh'),
+                            ),
+                          ],
                         ),
                       ),
                     ),
@@ -644,16 +966,18 @@ class _AccountsManagementPageState extends State<AccountsManagementPage> {
 
                       child: Column(
                         children: [
-                          // =================================================
+                          // =========================================
                           // TYPE
-                          // =================================================
+                          // =========================================
                           DropdownButtonFormField<String>(
                             initialValue: transactionType,
+
                             decoration: const InputDecoration(
                               labelText: 'Transaction Type',
                               border: OutlineInputBorder(),
                               prefixIcon: Icon(Icons.swap_horiz),
                             ),
+
                             items: const [
                               DropdownMenuItem(
                                 value: 'Income',
@@ -664,54 +988,66 @@ class _AccountsManagementPageState extends State<AccountsManagementPage> {
                                 child: Text('Expense'),
                               ),
                             ],
-                            onChanged: (value) {
-                              if (value == null) {
-                                return;
-                              }
 
-                              updateTransactionType(value);
-                            },
+                            onChanged: isSavingTransaction
+                                ? null
+                                : (value) {
+                                    if (value == null) {
+                                      return;
+                                    }
+
+                                    updateTransactionType(value);
+                                  },
                           ),
 
                           const SizedBox(height: 15),
 
-                          // =================================================
+                          // =========================================
                           // CATEGORY
-                          // =================================================
+                          // =========================================
                           DropdownButtonFormField<String>(
                             initialValue: category,
+
                             decoration: const InputDecoration(
                               labelText: 'Category',
                               border: OutlineInputBorder(),
                               prefixIcon: Icon(Icons.category),
                             ),
+
                             items: categories.map((item) {
                               return DropdownMenuItem<String>(
                                 value: item,
                                 child: Text(item),
                               );
                             }).toList(),
-                            onChanged: (value) {
-                              if (value == null) {
-                                return;
-                              }
 
-                              setState(() {
-                                category = value;
-                              });
-                            },
+                            onChanged: isSavingTransaction
+                                ? null
+                                : (value) {
+                                    if (value == null) {
+                                      return;
+                                    }
+
+                                    setState(() {
+                                      category = value;
+                                    });
+                                  },
                           ),
 
                           const SizedBox(height: 15),
 
-                          // =================================================
+                          // =========================================
                           // AMOUNT
-                          // =================================================
+                          // =========================================
                           TextField(
                             controller: amountController,
+
+                            enabled: !isSavingTransaction,
+
                             keyboardType: const TextInputType.numberWithOptions(
                               decimal: true,
                             ),
+
                             decoration: const InputDecoration(
                               labelText: 'Amount',
                               hintText: 'Example: 50000',
@@ -723,12 +1059,16 @@ class _AccountsManagementPageState extends State<AccountsManagementPage> {
 
                           const SizedBox(height: 15),
 
-                          // =================================================
+                          // =========================================
                           // NOTE
-                          // =================================================
+                          // =========================================
                           TextField(
                             controller: noteController,
+
+                            enabled: !isSavingTransaction,
+
                             maxLines: 2,
+
                             decoration: const InputDecoration(
                               labelText: 'Note',
                               hintText: 'Example: Rice sale payment',
@@ -739,19 +1079,37 @@ class _AccountsManagementPageState extends State<AccountsManagementPage> {
 
                           const SizedBox(height: 20),
 
-                          // =================================================
+                          // =========================================
                           // ADD BUTTON
-                          // =================================================
+                          // =========================================
                           SizedBox(
                             width: double.infinity,
                             height: 52,
+
                             child: ElevatedButton.icon(
-                              onPressed: addTransaction,
-                              icon: const Icon(Icons.add),
-                              label: const Text(
-                                'Add Transaction',
-                                style: TextStyle(fontSize: 16),
+                              onPressed:
+                                  selectedAccount == null || isSavingTransaction
+                                  ? null
+                                  : addTransaction,
+
+                              icon: isSavingTransaction
+                                  ? const SizedBox(
+                                      width: 20,
+                                      height: 20,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                        color: Colors.white,
+                                      ),
+                                    )
+                                  : const Icon(Icons.add),
+
+                              label: Text(
+                                isSavingTransaction
+                                    ? 'Saving...'
+                                    : 'Add Transaction',
+                                style: const TextStyle(fontSize: 16),
                               ),
+
                               style: ElevatedButton.styleFrom(
                                 backgroundColor: const Color(0xFF1B5E20),
                                 foregroundColor: Colors.white,
@@ -784,9 +1142,11 @@ class _AccountsManagementPageState extends State<AccountsManagementPage> {
                         width: 300,
                         child: TextField(
                           controller: searchController,
+
                           decoration: InputDecoration(
                             hintText: 'Search transaction...',
                             prefixIcon: const Icon(Icons.search),
+
                             suffixIcon: searchController.text.isNotEmpty
                                 ? IconButton(
                                     onPressed: () {
@@ -795,6 +1155,7 @@ class _AccountsManagementPageState extends State<AccountsManagementPage> {
                                     icon: const Icon(Icons.clear),
                                   )
                                 : null,
+
                             border: const OutlineInputBorder(),
                           ),
                         ),
@@ -805,15 +1166,26 @@ class _AccountsManagementPageState extends State<AccountsManagementPage> {
                   const SizedBox(height: 18),
 
                   // =================================================
+                  // TRANSACTION LOADING
+                  // =================================================
+                  if (isTransactionLoading)
+                    const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 30),
+                      child: Center(child: CircularProgressIndicator()),
+                    ),
+
+                  // =================================================
                   // EMPTY
                   // =================================================
-                  if (filteredTransactions.isEmpty)
+                  if (!isTransactionLoading && filteredTransactions.isEmpty)
                     Card(
                       child: SizedBox(
                         width: double.infinity,
                         height: 220,
+
                         child: Column(
                           mainAxisAlignment: MainAxisAlignment.center,
+
                           children: [
                             const Icon(
                               Icons.account_balance_wallet_outlined,
@@ -840,9 +1212,10 @@ class _AccountsManagementPageState extends State<AccountsManagementPage> {
                   // =================================================
                   // TRANSACTION LIST
                   // =================================================
-                  ...filteredTransactions.asMap().entries.map((entry) {
-                    return transactionCard(entry.value, entry.key);
-                  }),
+                  if (!isTransactionLoading)
+                    ...filteredTransactions.asMap().entries.map((entry) {
+                      return transactionCard(entry.value, entry.key);
+                    }),
 
                   const SizedBox(height: 30),
                 ],
