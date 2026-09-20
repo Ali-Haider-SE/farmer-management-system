@@ -43,3 +43,6 @@ macos/Flutter/ephemeral/
 
 # IntelliJ / Android Studio project files
 *.iml
+
+# Ignore accidental nested duplicate project
+farmer management/
