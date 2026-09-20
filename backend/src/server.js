@@ -9,6 +9,7 @@ dotenv.config();
 const app = express();
 
 const PORT = Number(process.env.PORT) || 5000;
+
 const partiesRouter = require('./parties');
 const khataRouter = require('./khata');
 const farmersRouter = require('./farmers');
@@ -17,7 +18,6 @@ const riceRoutes = require('./rice');
 const wheatRoutes = require('./wheat');
 const stockRouter = require('./stock');
 const accountsRouter = require('./accounts');
-
 
 // -----------------------------------------------------------------------------
 // MIDDLEWARE
@@ -32,21 +32,39 @@ app.use(
 );
 
 app.use(express.json());
+
+// -----------------------------------------------------------------------------
+// AUTHENTICATION
+// -----------------------------------------------------------------------------
+// Login route is public.
+// /api/auth/me is protected internally by auth.js.
+//
+// All business APIs below require a valid JWT token.
+// -----------------------------------------------------------------------------
+
 app.use('/api/auth', authRouter);
-app.use('/api/parties', partiesRouter);
-app.use('/api/khata', khataRouter);
-app.use('/api/farmers', farmersRouter);
-app.use('/api/farms', farmsRouter);
-app.use('/api/rice', riceRoutes);
-app.use('/api/wheat', wheatRoutes);
-app.use('/api/stock', stockRouter);
-app.use('/api/accounts', accountsRouter);
+
+app.use('/api/parties', authRouter.authenticate, partiesRouter);
+app.use('/api/khata', authRouter.authenticate, khataRouter);
+app.use('/api/farmers', authRouter.authenticate, farmersRouter);
+app.use('/api/farms', authRouter.authenticate, farmsRouter);
+app.use('/api/rice', authRouter.authenticate, riceRoutes);
+app.use('/api/wheat', authRouter.authenticate, wheatRoutes);
+app.use('/api/stock', authRouter.authenticate, stockRouter);
+app.use('/api/accounts', authRouter.authenticate, accountsRouter);
+
+// -----------------------------------------------------------------------------
+// KHATA TEST ROUTE
+// -----------------------------------------------------------------------------
 
 app.get('/api/khata-test', (req, res) => {
-  res.json({ success: true, message: 'Khata route is registered' });
+  res.json({
+    success: true,
+    message: 'Khata route is registered',
+  });
 });
-app.use(express.urlencoded({ extended: true }));
 
+app.use(express.urlencoded({ extended: true }));
 
 // -----------------------------------------------------------------------------
 // BASIC ROUTES
