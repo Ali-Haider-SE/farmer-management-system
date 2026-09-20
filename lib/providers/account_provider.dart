@@ -16,7 +16,12 @@ class AccountProvider extends ChangeNotifier {
   List<AccountModel> get accounts => List.unmodifiable(_accounts);
 
   bool get isLoading => _isLoading;
+
   String? get error => _error;
+
+  // ============================================================
+  // LOAD ACCOUNTS FROM API
+  // ============================================================
 
   Future<void> loadAccounts() async {
     _isLoading = true;
@@ -24,11 +29,11 @@ class AccountProvider extends ChangeNotifier {
     notifyListeners();
 
     try {
-      // Load accounts from the backend API/PostgreSQL.
-      //
       // IMPORTANT:
-      // We are NOT deleting or migrating the existing local
-      // SharedPreferences data. It remains untouched for now.
+      // Accounts are now loaded from the backend API/PostgreSQL.
+      //
+      // Existing SharedPreferences data is NOT deleted,
+      // migrated, or overwritten.
       _accounts = await _repository.getAccountsFromApi();
     } catch (e) {
       _error = e.toString();
@@ -37,6 +42,10 @@ class AccountProvider extends ChangeNotifier {
       notifyListeners();
     }
   }
+
+  // ============================================================
+  // ACCOUNT HELPERS
+  // ============================================================
 
   List<AccountModel> get activeAccounts {
     return _accounts.where((account) => account.isActive).toList();
@@ -49,12 +58,43 @@ class AccountProvider extends ChangeNotifier {
     );
   }
 
+  AccountModel? getAccountById(String id) {
+    for (final account in _accounts) {
+      if (account.id == id) {
+        return account;
+      }
+    }
+
+    return null;
+  }
+
+  // ============================================================
+  // CREATE / UPDATE ACCOUNT THROUGH API
+  // ============================================================
+
   Future<bool> saveAccount(AccountModel account) async {
+    _error = null;
+    notifyListeners();
+
     try {
-      // Keep local storage behavior unchanged for now.
-      // API create/update migration will be handled in a later step.
-      await _repository.save(account);
-      _accounts = _repository.getAccounts();
+      final existingIndex = _accounts.indexWhere(
+        (item) => item.id == account.id,
+      );
+
+      late final AccountModel savedAccount;
+
+      if (existingIndex >= 0) {
+        // Existing account → UPDATE API
+        savedAccount = await _repository.updateAccountApi(account);
+
+        _accounts[existingIndex] = savedAccount;
+      } else {
+        // New account → CREATE API
+        savedAccount = await _repository.createAccountApi(account);
+
+        _accounts = [..._accounts, savedAccount];
+      }
+
       notifyListeners();
       return true;
     } catch (e) {
@@ -64,12 +104,19 @@ class AccountProvider extends ChangeNotifier {
     }
   }
 
+  // ============================================================
+  // DELETE ACCOUNT THROUGH API
+  // ============================================================
+
   Future<bool> deleteAccount(String id) async {
+    _error = null;
+    notifyListeners();
+
     try {
-      // Keep local storage behavior unchanged for now.
-      // API delete migration will be handled in a later step.
-      await _repository.delete(id);
-      _accounts = _repository.getAccounts();
+      await _repository.deleteAccountApi(id);
+
+      _accounts = _accounts.where((account) => account.id != id).toList();
+
       notifyListeners();
       return true;
     } catch (e) {
@@ -78,6 +125,28 @@ class AccountProvider extends ChangeNotifier {
       return false;
     }
   }
+
+  // ============================================================
+  // ACCOUNT SUMMARY
+  // ============================================================
+
+  Future<Map<String, dynamic>?> loadAccountSummary() async {
+    try {
+      _error = null;
+
+      final summary = await _repository.getAccountSummaryApi();
+
+      return summary;
+    } catch (e) {
+      _error = e.toString();
+      notifyListeners();
+      return null;
+    }
+  }
+
+  // ============================================================
+  // ERROR
+  // ============================================================
 
   void clearError() {
     _error = null;

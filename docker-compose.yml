@@ -1,0 +1,12 @@
+services:
+  backend:
+    build:
+      context: ./backend
+    container_name: farmer-management-api
+    ports:
+      - "5000:5000"
+    env_file:
+      - ./backend/.env
+    environment:
+      DATABASE_URL: postgresql://farmer_app_user:ali@host.docker.internal:5432/farmer_management
+    restart: unless-stopped
