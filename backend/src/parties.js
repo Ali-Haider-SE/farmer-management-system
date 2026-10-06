@@ -127,6 +127,31 @@ async function recalculatePartyBalances(client, partyId) {
 }
 
 // =====================================================
+// GET PARTIES LOOKUP (id, name, phone, party_type)
+// =====================================================
+router.get('/lookup', async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT id, name, phone, party_type
+       FROM parties
+       WHERE is_active = TRUE
+       ORDER BY name ASC`,
+    );
+
+    return res.status(200).json({
+      success: true,
+      parties: result.rows,
+    });
+  } catch (error) {
+    console.error('Get parties lookup error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to fetch party lookup list',
+    });
+  }
+});
+
+// =====================================================
 // GET ALL PARTIES
 // =====================================================
 router.get('/', async (req, res) => {

@@ -1,15 +1,25 @@
 import 'dart:async';
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 class ApiService {
   ApiService._();
 
   static final ApiService instance = ApiService._();
-  String _baseUrl = const String.fromEnvironment(
-    'API_BASE_URL',
-    defaultValue: 'http://localhost:5050/api',
-  );
+
+  static String _resolveDefaultBaseUrl() {
+    const fromEnv = String.fromEnvironment('API_BASE_URL');
+    if (fromEnv.isNotEmpty) {
+      return fromEnv;
+    }
+    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
+      return 'http://10.0.2.2:5000/api';
+    }
+    return 'http://localhost:5000/api';
+  }
+
+  String _baseUrl = _resolveDefaultBaseUrl();
   String? _accessToken;
 
   Duration requestTimeout = const Duration(seconds: 30);

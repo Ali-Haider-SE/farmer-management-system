@@ -45,23 +45,49 @@ class DashboardProvider extends ChangeNotifier {
   double get totalStockValue => _totalStockValue;
   double get totalAccountBalance => _totalAccountBalance;
 
-  Future<void> loadDashboard() async {
+  Future<void> loadDashboard({String role = 'Admin'}) async {
     _isLoading = true;
     _error = null;
     notifyListeners();
 
+    final canParties = role.toLowerCase() == 'admin' || role.toLowerCase() == 'accountant';
+    final canAccounts = role.toLowerCase() == 'admin' || role.toLowerCase() == 'accountant';
+    final canStock = role.toLowerCase() == 'admin' || role.toLowerCase() == 'farm manager' || role.toLowerCase() == 'rice/wheat manager';
+    final canRice = role.toLowerCase() == 'admin' || role.toLowerCase() == 'rice/wheat manager';
+    final canWheat = role.toLowerCase() == 'admin' || role.toLowerCase() == 'rice/wheat manager';
+
     try {
-      _totalParties = (await _partyRepository.getParties()).length;
-      _totalAccounts = (await _accountRepository.getAccountsFromApi()).length;
-      _totalStockItems = (await _stockRepository.getStockFromApi()).length;
+      if (canParties) {
+        try {
+          _totalParties = (await _partyRepository.getParties()).length;
+        } catch (_) {}
+      }
 
-      _totalRiceAmount = await _reportRepository.getTotalRiceAmount();
+      if (canAccounts) {
+        try {
+          _totalAccounts = (await _accountRepository.getAccountsFromApi()).length;
+          _totalAccountBalance = await _reportRepository.getTotalAccountBalance();
+        } catch (_) {}
+      }
 
-      _totalWheatAmount = await _reportRepository.getTotalWheatAmount();
+      if (canStock) {
+        try {
+          _totalStockItems = (await _stockRepository.getStockFromApi()).length;
+          _totalStockValue = await _reportRepository.getTotalStockValue();
+        } catch (_) {}
+      }
 
-      _totalStockValue = await _reportRepository.getTotalStockValue();
+      if (canRice) {
+        try {
+          _totalRiceAmount = await _reportRepository.getTotalRiceAmount();
+        } catch (_) {}
+      }
 
-      _totalAccountBalance = await _reportRepository.getTotalAccountBalance();
+      if (canWheat) {
+        try {
+          _totalWheatAmount = await _reportRepository.getTotalWheatAmount();
+        } catch (_) {}
+      }
     } catch (e) {
       _error = e.toString();
     } finally {

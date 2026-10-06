@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../providers/auth_provider.dart';
-import 'dashboard_page.dart';
 
 class LoginPage extends StatefulWidget {
   const LoginPage({super.key});
@@ -18,7 +17,6 @@ class _LoginPageState extends State<LoginPage> {
   final _passwordController = TextEditingController();
 
   bool _obscurePassword = true;
-  bool _isLoading = false;
 
   String _selectedRole = 'Admin';
 
@@ -41,13 +39,9 @@ class _LoginPageState extends State<LoginPage> {
       return;
     }
 
-    setState(() {
-      _isLoading = true;
-    });
-
     try {
       final username = _usernameController.text.trim();
-      final password = _passwordController.text.trim();
+      final password = _passwordController.text;
 
       final authProvider = context.read<AuthProvider>();
 
@@ -68,10 +62,7 @@ class _LoginPageState extends State<LoginPage> {
         );
         return;
       }
-
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute(builder: (_) => DashboardPage(role: user.role)),
-      );
+      // Successful login is handled reactively by _SessionGate
     } catch (e) {
       if (!mounted) return;
 
@@ -81,17 +72,13 @@ class _LoginPageState extends State<LoginPage> {
           behavior: SnackBarBehavior.floating,
         ),
       );
-    } finally {
-      if (mounted) {
-        setState(() {
-          _isLoading = false;
-        });
-      }
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    final isAuthenticating = context.watch<AuthProvider>().isAuthenticating;
+
     return Scaffold(
       body: Container(
         width: double.infinity,
@@ -180,7 +167,44 @@ class _LoginPageState extends State<LoginPage> {
                                   ),
                                 ),
 
-                                const SizedBox(height: 24),
+                                const SizedBox(height: 16),
+
+                                Consumer<AuthProvider>(
+                                  builder: (context, auth, _) {
+                                    if (auth.isServerUnreachable) {
+                                      return Container(
+                                        margin: const EdgeInsets.only(bottom: 16),
+                                        padding: const EdgeInsets.all(12),
+                                        decoration: BoxDecoration(
+                                          color: Colors.red.shade50,
+                                          borderRadius: BorderRadius.circular(10),
+                                          border: Border.all(color: Colors.red.shade200),
+                                        ),
+                                        child: Row(
+                                          children: [
+                                            Icon(Icons.wifi_off, color: Colors.red.shade700, size: 20),
+                                            const SizedBox(width: 8),
+                                            Expanded(
+                                              child: Text(
+                                                'Cannot reach server. Check backend connection.',
+                                                style: TextStyle(
+                                                  color: Colors.red.shade800,
+                                                  fontSize: 12,
+                                                  fontWeight: FontWeight.w500,
+                                                ),
+                                              ),
+                                            ),
+                                            TextButton(
+                                              onPressed: () => auth.initialize(),
+                                              child: const Text('Retry'),
+                                            ),
+                                          ],
+                                        ),
+                                      );
+                                    }
+                                    return const SizedBox.shrink();
+                                  },
+                                ),
 
                                 DropdownButtonFormField<String>(
                                   initialValue: _selectedRole,
@@ -199,7 +223,7 @@ class _LoginPageState extends State<LoginPage> {
                                       child: Text(role),
                                     );
                                   }).toList(),
-                                  onChanged: _isLoading
+                                  onChanged: isAuthenticating
                                       ? null
                                       : (value) {
                                           if (value == null) return;
@@ -214,7 +238,7 @@ class _LoginPageState extends State<LoginPage> {
 
                                 TextFormField(
                                   controller: _usernameController,
-                                  enabled: !_isLoading,
+                                  enabled: !isAuthenticating,
                                   textInputAction: TextInputAction.next,
                                   decoration: InputDecoration(
                                     labelText: 'Username',
@@ -239,11 +263,11 @@ class _LoginPageState extends State<LoginPage> {
 
                                 TextFormField(
                                   controller: _passwordController,
-                                  enabled: !_isLoading,
+                                  enabled: !isAuthenticating,
                                   obscureText: _obscurePassword,
                                   textInputAction: TextInputAction.done,
                                   onFieldSubmitted: (_) {
-                                    if (!_isLoading) {
+                                    if (!isAuthenticating) {
                                       _login();
                                     }
                                   },
@@ -255,7 +279,7 @@ class _LoginPageState extends State<LoginPage> {
                                       tooltip: _obscurePassword
                                           ? 'Show password'
                                           : 'Hide password',
-                                      onPressed: _isLoading
+                                      onPressed: isAuthenticating
                                           ? null
                                           : () {
                                               setState(() {
@@ -284,35 +308,42 @@ class _LoginPageState extends State<LoginPage> {
 
                                 const SizedBox(height: 24),
 
-                                SizedBox(
-                                  width: double.infinity,
-                                  height: 50,
-                                  child: ElevatedButton(
-                                    onPressed: _isLoading ? null : _login,
-                                    style: ElevatedButton.styleFrom(
-                                      backgroundColor: const Color(0xFF1B5E20),
-                                      foregroundColor: Colors.white,
-                                      shape: RoundedRectangleBorder(
-                                        borderRadius: BorderRadius.circular(12),
-                                      ),
-                                    ),
-                                    child: _isLoading
-                                        ? const SizedBox(
-                                            width: 22,
-                                            height: 22,
-                                            child: CircularProgressIndicator(
-                                              strokeWidth: 2.5,
-                                              color: Colors.white,
-                                            ),
-                                          )
-                                        : const Text(
-                                            'Login',
-                                            style: TextStyle(
-                                              fontSize: 16,
-                                              fontWeight: FontWeight.bold,
-                                            ),
+                                Builder(
+                                  builder: (context) {
+                                    final isAuthenticating = context
+                                        .watch<AuthProvider>()
+                                        .isAuthenticating;
+                                    return SizedBox(
+                                      width: double.infinity,
+                                      height: 50,
+                                      child: ElevatedButton(
+                                        onPressed: isAuthenticating ? null : _login,
+                                        style: ElevatedButton.styleFrom(
+                                          backgroundColor: const Color(0xFF1B5E20),
+                                          foregroundColor: Colors.white,
+                                          shape: RoundedRectangleBorder(
+                                            borderRadius: BorderRadius.circular(12),
                                           ),
-                                  ),
+                                        ),
+                                        child: isAuthenticating
+                                            ? const SizedBox(
+                                                width: 22,
+                                                height: 22,
+                                                child: CircularProgressIndicator(
+                                                  strokeWidth: 2.5,
+                                                  color: Colors.white,
+                                                ),
+                                              )
+                                            : const Text(
+                                                'Login',
+                                                style: TextStyle(
+                                                  fontSize: 16,
+                                                  fontWeight: FontWeight.bold,
+                                                ),
+                                              ),
+                                      ),
+                                    );
+                                  },
                                 ),
 
                                 const SizedBox(height: 18),

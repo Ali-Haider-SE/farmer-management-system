@@ -22,9 +22,9 @@ import 'parties_khata_page.dart';
 import 'reports_page.dart';
 import 'stock_management_page.dart';
 import 'settings_page.dart';
-import 'login_page.dart';
+import 'package:provider/provider.dart';
+import '../providers/auth_provider.dart';
 
-import '../repositories/auth_repository.dart';
 import '../repositories/farm_repository.dart';
 import '../repositories/rice_repository.dart';
 import '../repositories/wheat_repository.dart';
@@ -567,51 +567,84 @@ class _DashboardPageState extends State<DashboardPage> {
   // =========================================================
 
   Future<void> loadDashboardData() async {
+    final role = widget.role;
+    final canFarms = RolePermissions.canManageFarms(role);
+    final canRice = RolePermissions.canManageRice(role);
+    final canWheat = RolePermissions.canManageWheat(role);
+    final canParties = RolePermissions.canManageParties(role);
+    final canAccounts = RolePermissions.canManageAccounts(role);
+
+    List<Map<String, dynamic>> loadedFarms = [];
+    List<Map<String, dynamic>> loadedRiceTransactions = [];
+    List<Map<String, dynamic>> loadedWheatTransactions = [];
+    List<Map<String, dynamic>> loadedParties = [];
+    List<Map<String, dynamic>> loadedAccounts = [];
+    String? defaultAccId;
+
+    if (canFarms) {
+      try {
+        loadedFarms = await FarmRepository().getFarmRecords();
+      } catch (e) {
+        debugPrint('Dashboard farms load error: $e');
+      }
+    }
+
+    if (canRice) {
+      try {
+        loadedRiceTransactions = (await RiceRepository().getTransactionsFromApi())
+            .map((item) => item.toJson())
+            .toList();
+      } catch (e) {
+        debugPrint('Dashboard rice load error: $e');
+      }
+    }
+
+    if (canWheat) {
+      try {
+        loadedWheatTransactions = (await WheatRepository().getTransactionsFromApi())
+            .map((item) => item.toJson())
+            .toList();
+      } catch (e) {
+        debugPrint('Dashboard wheat load error: $e');
+      }
+    }
+
+    if (canParties) {
+      try {
+        loadedParties = (await PartyRepository().getParties())
+            .map((item) => item.toJson())
+            .toList();
+      } catch (e) {
+        debugPrint('Dashboard parties load error: $e');
+      }
+    }
+
+    if (canAccounts) {
+      try {
+        final accounts = await AccountRepository().getAccountsFromApi();
+        defaultAccId = accounts.where((item) => item.isActive).firstOrNull?.id;
+        loadedAccounts = await ReportRepository().getAccountTransactions();
+      } catch (e) {
+        debugPrint('Dashboard accounts load error: $e');
+      }
+    }
+
+    if (!mounted) return;
+
+    setState(() {
+      farms = loadedFarms;
+      riceTransactions = loadedRiceTransactions;
+      wheatTransactions = loadedWheatTransactions;
+      parties = loadedParties;
+      accountTransactions = loadedAccounts;
+      _defaultAccountId = defaultAccId;
+      isLoading = false;
+    });
+
     try {
-      final farmRepository = FarmRepository();
-      final riceRepository = RiceRepository();
-      final wheatRepository = WheatRepository();
-      final partyRepository = PartyRepository();
-      final reportRepository = ReportRepository();
-
-      final loadedFarms = await farmRepository.getFarmRecords();
-      final loadedRiceTransactions =
-          (await riceRepository.getTransactionsFromApi())
-              .map((item) => item.toJson())
-              .toList();
-      final loadedWheatTransactions =
-          (await wheatRepository.getTransactionsFromApi())
-              .map((item) => item.toJson())
-              .toList();
-      final loadedParties =
-          (await partyRepository.getParties())
-              .map((item) => item.toJson())
-              .toList();
-      final accounts = await AccountRepository().getAccountsFromApi();
-      _defaultAccountId = accounts.where((item) => item.isActive).firstOrNull?.id;
-      final loadedAccounts = await reportRepository.getAccountTransactions();
-
-      if (!mounted) return;
-
-      setState(() {
-        farms = loadedFarms;
-        riceTransactions = loadedRiceTransactions;
-        wheatTransactions = loadedWheatTransactions;
-        parties = loadedParties;
-        accountTransactions = loadedAccounts;
-        isLoading = false;
-      });
-
       await _generateSystemAlerts();
-    } catch (e, st) {
-      debugPrint('Dashboard API load error: $e\n$st');
-      if (!mounted) return;
-      setState(() {
-        isLoading = false;
-      });
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to load dashboard data: $e')),
-      );
+    } catch (e) {
+      debugPrint('Dashboard alerts error: $e');
     }
   }
 
@@ -619,16 +652,23 @@ class _DashboardPageState extends State<DashboardPage> {
   /// finished loading. Respects the "Enable Notifications" setting and
   /// de-duplicates so the same alert isn't repeated on every refresh.
   Future<void> _generateSystemAlerts() async {
-    await NotificationCenter.instance.checkLowStock(
-      label: 'Rice',
-      quantity: currentRiceStock,
-      threshold: 50,
-    );
-    await NotificationCenter.instance.checkLowStock(
-      label: 'Wheat',
-      quantity: currentWheatStock,
-      threshold: 50,
-    );
+    final role = widget.role;
+    if (RolePermissions.canManageStock(role)) {
+      await NotificationCenter.instance.checkLowStock(
+        label: 'Rice',
+        quantity: currentRiceStock,
+        threshold: 50,
+      );
+      await NotificationCenter.instance.checkLowStock(
+        label: 'Wheat',
+        quantity: currentWheatStock,
+        threshold: 50,
+      );
+    }
+
+    if (!RolePermissions.canManageParties(role)) {
+      return;
+    }
 
     // Khata alerts: large outstanding balances and old receivables.
     for (final party in parties) {
@@ -683,14 +723,8 @@ class _DashboardPageState extends State<DashboardPage> {
   // =========================================================
 
   Future<void> logout() async {
-    await AuthRepository().logout();
-
     if (!mounted) return;
-
-    Navigator.of(context).pushAndRemoveUntil(
-      MaterialPageRoute(builder: (_) => const LoginPage()),
-      (route) => false,
-    );
+    await context.read<AuthProvider>().logout();
   }
 
   // =========================================================
@@ -1372,14 +1406,8 @@ class _DashboardPageState extends State<DashboardPage> {
   // =========================================================
 
   Future<void> performLogout() async {
-    await AuthRepository().logout();
-
     if (!mounted) return;
-
-    Navigator.of(context).pushAndRemoveUntil(
-      MaterialPageRoute(builder: (_) => const LoginPage()),
-      (route) => false,
-    );
+    await context.read<AuthProvider>().logout();
   }
 
   // =========================================================
@@ -2082,14 +2110,8 @@ class DashboardContent extends StatelessWidget {
                 aspectRatio = 1.9;
               }
 
-              return GridView.count(
-                crossAxisCount: crossAxisCount,
-                crossAxisSpacing: 18,
-                mainAxisSpacing: 18,
-                shrinkWrap: true,
-                childAspectRatio: aspectRatio,
-                physics: const NeverScrollableScrollPhysics(),
-                children: [
+              final cards = <Widget>[
+                if (accessibleIndices.contains(5)) ...[
                   SummaryCard(
                     title: 'Total Income',
                     value: 'Rs. ${totalIncome.toStringAsFixed(0)}',
@@ -2110,6 +2132,8 @@ class DashboardContent extends StatelessWidget {
                         : Icons.warning,
                     color: netProfit >= 0 ? Colors.blue : Colors.red,
                   ),
+                ],
+                if (accessibleIndices.contains(4)) ...[
                   SummaryCard(
                     title: 'Total Receivable',
                     value: 'Rs. ${totalReceivable.toStringAsFixed(0)}',
@@ -2128,6 +2152,8 @@ class DashboardContent extends StatelessWidget {
                     icon: Icons.people,
                     color: Colors.indigo,
                   ),
+                ],
+                if (accessibleIndices.contains(6)) ...[
                   SummaryCard(
                     title: 'Rice Stock',
                     value: '${riceStock.toStringAsFixed(2)} Maund',
@@ -2140,6 +2166,8 @@ class DashboardContent extends StatelessWidget {
                     icon: Icons.grass,
                     color: Colors.brown,
                   ),
+                ],
+                if (accessibleIndices.contains(1)) ...[
                   SummaryCard(
                     title: 'Total Farms',
                     value: farmsCount.toString(),
@@ -2153,48 +2181,53 @@ class DashboardContent extends StatelessWidget {
                     color: Colors.purple,
                   ),
                 ],
+              ];
+
+              return GridView.count(
+                crossAxisCount: crossAxisCount,
+                crossAxisSpacing: 18,
+                mainAxisSpacing: 18,
+                shrinkWrap: true,
+                childAspectRatio: aspectRatio,
+                physics: const NeverScrollableScrollPhysics(),
+                children: cards,
               );
             },
           ),
 
-          const SizedBox(height: 35),
-
-          const Text(
-            'Parties / Khata Overview',
-            style: TextStyle(fontSize: 25, fontWeight: FontWeight.bold),
-          ),
-
-          const SizedBox(height: 20),
-
-          ResponsiveCardRow(
-            minCardWidth: 220,
-            aspectRatio: 2.6,
-            maxColumns: 3,
-            children: [
-              SummaryCard(
-                title: 'Total Parties',
-                value: totalParties.toString(),
-                icon: Icons.people,
-                color: Colors.indigo,
-              ),
-              SummaryCard(
-                title: 'Receivable',
-                value: 'Rs. ${totalReceivable.toStringAsFixed(0)}',
-                icon: Icons.arrow_downward,
-                color: Colors.green,
-              ),
-              SummaryCard(
-                title: 'Payable',
-                value: 'Rs. ${totalPayable.toStringAsFixed(0)}',
-                icon: Icons.arrow_upward,
-                color: Colors.red,
-              ),
-            ],
-          ),
-
-          const SizedBox(height: 15),
-
-          if (accessibleIndices.contains(4))
+          if (accessibleIndices.contains(4)) ...[
+            const SizedBox(height: 35),
+            const Text(
+              'Parties / Khata Overview',
+              style: TextStyle(fontSize: 25, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 20),
+            ResponsiveCardRow(
+              minCardWidth: 220,
+              aspectRatio: 2.6,
+              maxColumns: 3,
+              children: [
+                SummaryCard(
+                  title: 'Total Parties',
+                  value: totalParties.toString(),
+                  icon: Icons.people,
+                  color: Colors.indigo,
+                ),
+                SummaryCard(
+                  title: 'Receivable',
+                  value: 'Rs. ${totalReceivable.toStringAsFixed(0)}',
+                  icon: Icons.arrow_downward,
+                  color: Colors.green,
+                ),
+                SummaryCard(
+                  title: 'Payable',
+                  value: 'Rs. ${totalPayable.toStringAsFixed(0)}',
+                  icon: Icons.arrow_upward,
+                  color: Colors.red,
+                ),
+              ],
+            ),
+            const SizedBox(height: 15),
             SizedBox(
               height: 52,
               child: ElevatedButton.icon(
@@ -2210,132 +2243,127 @@ class DashboardContent extends StatelessWidget {
                 ),
               ),
             ),
+          ],
 
-          const SizedBox(height: 35),
+          if (accessibleIndices.contains(2)) ...[
+            const SizedBox(height: 35),
+            const Text(
+              'Rice Overview',
+              style: TextStyle(fontSize: 25, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 20),
+            ResponsiveCardRow(
+              minCardWidth: 200,
+              aspectRatio: 2.2,
+              maxColumns: 4,
+              children: [
+                SummaryCard(
+                  title: 'Farm Production',
+                  value: '${riceProduction.toStringAsFixed(2)} Maund',
+                  icon: Icons.agriculture,
+                  color: Colors.teal,
+                ),
+                SummaryCard(
+                  title: 'Rice Purchased',
+                  value: '${ricePurchase.toStringAsFixed(2)} Maund',
+                  icon: Icons.shopping_cart,
+                  color: Colors.orange,
+                ),
+                SummaryCard(
+                  title: 'Rice Sold',
+                  value: '${riceSale.toStringAsFixed(2)} Maund',
+                  icon: Icons.sell,
+                  color: Colors.blue,
+                ),
+                SummaryCard(
+                  title: 'Current Stock',
+                  value: '${riceStock.toStringAsFixed(2)} Maund',
+                  icon: Icons.inventory,
+                  color: Colors.green,
+                ),
+              ],
+            ),
+            const SizedBox(height: 20),
+            ResponsiveCardRow(
+              minCardWidth: 220,
+              aspectRatio: 2.6,
+              maxColumns: 2,
+              children: [
+                SummaryCard(
+                  title: 'Purchase Amount',
+                  value: 'Rs. ${ricePurchaseAmount.toStringAsFixed(0)}',
+                  icon: Icons.money_off,
+                  color: Colors.red,
+                ),
+                SummaryCard(
+                  title: 'Sale Amount',
+                  value: 'Rs. ${riceSaleAmount.toStringAsFixed(0)}',
+                  icon: Icons.payments,
+                  color: Colors.green,
+                ),
+              ],
+            ),
+          ],
 
-          const Text(
-            'Rice Overview',
-            style: TextStyle(fontSize: 25, fontWeight: FontWeight.bold),
-          ),
-
-          const SizedBox(height: 20),
-
-          ResponsiveCardRow(
-            minCardWidth: 200,
-            aspectRatio: 2.2,
-            maxColumns: 4,
-            children: [
-              SummaryCard(
-                title: 'Farm Production',
-                value: '${riceProduction.toStringAsFixed(2)} Maund',
-                icon: Icons.agriculture,
-                color: Colors.teal,
-              ),
-              SummaryCard(
-                title: 'Rice Purchased',
-                value: '${ricePurchase.toStringAsFixed(2)} Maund',
-                icon: Icons.shopping_cart,
-                color: Colors.orange,
-              ),
-              SummaryCard(
-                title: 'Rice Sold',
-                value: '${riceSale.toStringAsFixed(2)} Maund',
-                icon: Icons.sell,
-                color: Colors.blue,
-              ),
-              SummaryCard(
-                title: 'Current Stock',
-                value: '${riceStock.toStringAsFixed(2)} Maund',
-                icon: Icons.inventory,
-                color: Colors.green,
-              ),
-            ],
-          ),
-
-          const SizedBox(height: 20),
-
-          ResponsiveCardRow(
-            minCardWidth: 220,
-            aspectRatio: 2.6,
-            maxColumns: 2,
-            children: [
-              SummaryCard(
-                title: 'Purchase Amount',
-                value: 'Rs. ${ricePurchaseAmount.toStringAsFixed(0)}',
-                icon: Icons.money_off,
-                color: Colors.red,
-              ),
-              SummaryCard(
-                title: 'Sale Amount',
-                value: 'Rs. ${riceSaleAmount.toStringAsFixed(0)}',
-                icon: Icons.payments,
-                color: Colors.green,
-              ),
-            ],
-          ),
-
-          const SizedBox(height: 35),
-
-          const Text(
-            'Wheat Overview',
-            style: TextStyle(fontSize: 25, fontWeight: FontWeight.bold),
-          ),
-
-          const SizedBox(height: 20),
-
-          ResponsiveCardRow(
-            minCardWidth: 200,
-            aspectRatio: 2.2,
-            maxColumns: 4,
-            children: [
-              SummaryCard(
-                title: 'Farm Production',
-                value: '${wheatProduction.toStringAsFixed(2)} Maund',
-                icon: Icons.agriculture,
-                color: Colors.teal,
-              ),
-              SummaryCard(
-                title: 'Wheat Purchased',
-                value: '${wheatPurchase.toStringAsFixed(2)} Maund',
-                icon: Icons.shopping_cart,
-                color: Colors.orange,
-              ),
-              SummaryCard(
-                title: 'Wheat Sold',
-                value: '${wheatSale.toStringAsFixed(2)} Maund',
-                icon: Icons.sell,
-                color: Colors.blue,
-              ),
-              SummaryCard(
-                title: 'Current Stock',
-                value: '${wheatStock.toStringAsFixed(2)} Maund',
-                icon: Icons.inventory,
-                color: Colors.brown,
-              ),
-            ],
-          ),
-
-          const SizedBox(height: 20),
-
-          ResponsiveCardRow(
-            minCardWidth: 220,
-            aspectRatio: 2.6,
-            maxColumns: 2,
-            children: [
-              SummaryCard(
-                title: 'Purchase Amount',
-                value: 'Rs. ${wheatPurchaseAmount.toStringAsFixed(0)}',
-                icon: Icons.money_off,
-                color: Colors.red,
-              ),
-              SummaryCard(
-                title: 'Sale Amount',
-                value: 'Rs. ${wheatSaleAmount.toStringAsFixed(0)}',
-                icon: Icons.payments,
-                color: Colors.green,
-              ),
-            ],
-          ),
+          if (accessibleIndices.contains(3)) ...[
+            const SizedBox(height: 35),
+            const Text(
+              'Wheat Overview',
+              style: TextStyle(fontSize: 25, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 20),
+            ResponsiveCardRow(
+              minCardWidth: 200,
+              aspectRatio: 2.2,
+              maxColumns: 4,
+              children: [
+                SummaryCard(
+                  title: 'Farm Production',
+                  value: '${wheatProduction.toStringAsFixed(2)} Maund',
+                  icon: Icons.agriculture,
+                  color: Colors.teal,
+                ),
+                SummaryCard(
+                  title: 'Wheat Purchased',
+                  value: '${wheatPurchase.toStringAsFixed(2)} Maund',
+                  icon: Icons.shopping_cart,
+                  color: Colors.orange,
+                ),
+                SummaryCard(
+                  title: 'Wheat Sold',
+                  value: '${wheatSale.toStringAsFixed(2)} Maund',
+                  icon: Icons.sell,
+                  color: Colors.blue,
+                ),
+                SummaryCard(
+                  title: 'Current Stock',
+                  value: '${wheatStock.toStringAsFixed(2)} Maund',
+                  icon: Icons.inventory,
+                  color: Colors.brown,
+                ),
+              ],
+            ),
+            const SizedBox(height: 20),
+            ResponsiveCardRow(
+              minCardWidth: 220,
+              aspectRatio: 2.6,
+              maxColumns: 2,
+              children: [
+                SummaryCard(
+                  title: 'Purchase Amount',
+                  value: 'Rs. ${wheatPurchaseAmount.toStringAsFixed(0)}',
+                  icon: Icons.money_off,
+                  color: Colors.red,
+                ),
+                SummaryCard(
+                  title: 'Sale Amount',
+                  value: 'Rs. ${wheatSaleAmount.toStringAsFixed(0)}',
+                  icon: Icons.payments,
+                  color: Colors.green,
+                ),
+              ],
+            ),
+          ],
 
           const SizedBox(height: 35),
 
@@ -2395,37 +2423,33 @@ class DashboardContent extends StatelessWidget {
             ],
           ),
 
-          const SizedBox(height: 35),
+          if (accessibleIndices.contains(2)) ...[
+            const SizedBox(height: 35),
+            const Text(
+              'Recent Rice Transactions',
+              style: TextStyle(fontSize: 25, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 15),
+            if (recentRiceTransactions.isEmpty)
+              const EmptyTransactionCard(message: 'No rice transactions yet'),
+            ...recentRiceTransactions.map((transaction) {
+              return TransactionCard(transaction: transaction, crop: 'Rice');
+            }),
+          ],
 
-          const Text(
-            'Recent Rice Transactions',
-            style: TextStyle(fontSize: 25, fontWeight: FontWeight.bold),
-          ),
-
-          const SizedBox(height: 15),
-
-          if (recentRiceTransactions.isEmpty)
-            const EmptyTransactionCard(message: 'No rice transactions yet'),
-
-          ...recentRiceTransactions.map((transaction) {
-            return TransactionCard(transaction: transaction, crop: 'Rice');
-          }),
-
-          const SizedBox(height: 35),
-
-          const Text(
-            'Recent Wheat Transactions',
-            style: TextStyle(fontSize: 25, fontWeight: FontWeight.bold),
-          ),
-
-          const SizedBox(height: 15),
-
-          if (recentWheatTransactions.isEmpty)
-            const EmptyTransactionCard(message: 'No wheat transactions yet'),
-
-          ...recentWheatTransactions.map((transaction) {
-            return TransactionCard(transaction: transaction, crop: 'Wheat');
-          }),
+          if (accessibleIndices.contains(3)) ...[
+            const SizedBox(height: 35),
+            const Text(
+              'Recent Wheat Transactions',
+              style: TextStyle(fontSize: 25, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 15),
+            if (recentWheatTransactions.isEmpty)
+              const EmptyTransactionCard(message: 'No wheat transactions yet'),
+            ...recentWheatTransactions.map((transaction) {
+              return TransactionCard(transaction: transaction, crop: 'Wheat');
+            }),
+          ],
 
           const SizedBox(height: 30),
         ],

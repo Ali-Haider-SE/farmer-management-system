@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 
 import '../models/user_model.dart';
 import '../repositories/auth_repository.dart';
+import '../services/api_service.dart';
 
 class AuthProvider extends ChangeNotifier {
   AuthProvider({AuthRepository? repository})
@@ -10,27 +11,38 @@ class AuthProvider extends ChangeNotifier {
   final AuthRepository _repository;
 
   UserModel? _currentUser;
-  bool _isLoading = false;
+  bool _isInitializing = false;
+  bool _isAuthenticating = false;
   String? _error;
+  bool _isServerUnreachable = false;
 
   UserModel? get currentUser => _currentUser;
 
-  bool get isLoading => _isLoading;
+  bool get isLoading => _isInitializing || _isAuthenticating;
+  bool get isInitializing => _isInitializing;
+  bool get isAuthenticating => _isAuthenticating;
 
   bool get isLoggedIn => _currentUser != null;
 
   String? get error => _error;
+  bool get isServerUnreachable => _isServerUnreachable;
 
   Future<void> initialize() async {
-    _setLoading(true);
+    _isInitializing = true;
+    _isServerUnreachable = false;
     _clearError();
+    notifyListeners();
 
     try {
       _currentUser = await _repository.getCurrentUser();
     } catch (e) {
       _error = e.toString();
+      if (e is ApiException && e.isNetworkError) {
+        _isServerUnreachable = true;
+      }
     } finally {
-      _setLoading(false);
+      _isInitializing = false;
+      notifyListeners();
     }
   }
 
@@ -39,8 +51,10 @@ class AuthProvider extends ChangeNotifier {
     required String password,
     required String role,
   }) async {
-    _setLoading(true);
+    _isAuthenticating = true;
+    _isServerUnreachable = false;
     _clearError();
+    notifyListeners();
 
     try {
       final user = await _repository.authenticate(
@@ -53,16 +67,25 @@ class AuthProvider extends ChangeNotifier {
 
       return user;
     } catch (e) {
-      _error = e.toString();
+      if (e is ApiException) {
+        _error = e.message;
+        if (e.isNetworkError) {
+          _isServerUnreachable = true;
+        }
+      } else {
+        _error = e.toString().replaceFirst(RegExp(r'^Exception:\s*'), '');
+      }
       return null;
     } finally {
-      _setLoading(false);
+      _isAuthenticating = false;
+      notifyListeners();
     }
   }
 
   Future<bool> saveUser(UserModel user) async {
-    _setLoading(true);
+    _isAuthenticating = true;
     _clearError();
+    notifyListeners();
 
     try {
       final success = await _repository.saveCurrentUser(user);
@@ -76,13 +99,15 @@ class AuthProvider extends ChangeNotifier {
       _error = e.toString();
       return false;
     } finally {
-      _setLoading(false);
+      _isAuthenticating = false;
+      notifyListeners();
     }
   }
 
   Future<void> logout() async {
-    _setLoading(true);
+    _isAuthenticating = true;
     _clearError();
+    notifyListeners();
 
     try {
       await _repository.logout();
@@ -90,17 +115,14 @@ class AuthProvider extends ChangeNotifier {
     } catch (e) {
       _error = e.toString();
     } finally {
-      _setLoading(false);
+      _currentUser = null;
+      _isAuthenticating = false;
+      notifyListeners();
     }
   }
 
   void clearError() {
     _clearError();
-    notifyListeners();
-  }
-
-  void _setLoading(bool value) {
-    _isLoading = value;
     notifyListeners();
   }
 

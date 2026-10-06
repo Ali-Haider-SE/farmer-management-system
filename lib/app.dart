@@ -63,12 +63,17 @@ class FarmerManagementApp extends StatelessWidget {
 
             onGenerateRoute: (routeSettings) {
               if (routeSettings.name == '/dashboard') {
-                final role = routeSettings.arguments is String
-                    ? routeSettings.arguments as String
-                    : 'Admin';
-
                 return MaterialPageRoute(
-                  builder: (context) => DashboardPage(role: role),
+                  builder: (context) {
+                    final auth = context.watch<AuthProvider>();
+                    if (auth.isLoggedIn && auth.currentUser != null) {
+                      final role = routeSettings.arguments is String
+                          ? routeSettings.arguments as String
+                          : auth.currentUser!.role;
+                      return DashboardPage(role: role);
+                    }
+                    return const LoginPage();
+                  },
                   settings: routeSettings,
                 );
               }
@@ -93,10 +98,52 @@ class _SessionGate extends StatelessWidget {
   Widget build(BuildContext context) {
     final auth = context.watch<AuthProvider>();
 
-    if (auth.isLoading) {
+    if (auth.isInitializing) {
       return const Scaffold(
         backgroundColor: Color(0xFF1B5E20),
         body: Center(child: CircularProgressIndicator(color: Colors.white)),
+      );
+    }
+
+    if (auth.isServerUnreachable) {
+      return Scaffold(
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24.0),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.cloud_off, size: 64, color: Colors.orange),
+                const SizedBox(height: 16),
+                const Text(
+                  'Server Unreachable',
+                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  auth.error ?? 'Could not connect to the server.',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(color: Colors.grey),
+                ),
+                const SizedBox(height: 24),
+                ElevatedButton.icon(
+                  onPressed: () => auth.initialize(),
+                  icon: const Icon(Icons.refresh),
+                  label: const Text('Retry'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF1B5E20),
+                    foregroundColor: Colors.white,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextButton(
+                  onPressed: () => auth.clearError(),
+                  child: const Text('Proceed to Login'),
+                ),
+              ],
+            ),
+          ),
+        ),
       );
     }
 

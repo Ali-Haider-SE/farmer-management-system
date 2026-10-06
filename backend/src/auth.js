@@ -16,6 +16,10 @@ function getJwtSecret() {
     throw new Error('JWT_SECRET is not configured');
   }
 
+  if (secret.length < 32 || secret === 'replace_with_a_long_random_secret' || secret.includes('YOUR_JWT_SECRET')) {
+    throw new Error('JWT_SECRET must be at least 32 characters long and not use a default placeholder');
+  }
+
   return secret;
 }
 
@@ -167,126 +171,6 @@ router.post('/login', async (req, res) => {
  } catch (error) {
     console.error('Login error:', error);
 
-    return res.status(500).json({
-      success: false,
-      message: 'Server error',
-    });
-  }
-});
-/**
- * POST /api/auth/social-login
- * Body: { idToken, role }
- * Used for both Google Sign-In and Phone OTP — Flutter sends the
- * Firebase ID token after the user signs in there.
- */
-router.post('/social-login', async (req, res) => {
-  try {
-    const { idToken, role } = req.body;
-
-    if (!idToken || !role) {
-      return res.status(400).json({
-        success: false,
-        message: 'idToken and role are required',
-      });
-    }
-
-    let decoded;
-    try {
-      decoded = await admin.auth().verifyIdToken(idToken);
-    } catch (err) {
-      return res.status(401).json({
-        success: false,
-        message: 'Invalid or expired Firebase token',
-      });
-    }
-
-    const firebaseUid = decoded.uid;
-    const email = decoded.email || null;
-    const phoneNumber = decoded.phone_number || null;
-    const name = decoded.name || email || phoneNumber || 'User';
-    const provider = phoneNumber && !email ? 'phone' : 'google';
-
-    // Try to find an existing user by firebase_uid, then by email/phone
-    let result = await pool.query(
-      `SELECT id, name, username, email, role, is_active, phone_number
-       FROM users
-       WHERE firebase_uid = $1
-       LIMIT 1`,
-      [firebaseUid],
-    );
-
-    let user = result.rows[0];
-
-    if (!user) {
-      // Link to an existing account with the same email/phone if present
-      if (email) {
-        result = await pool.query(
-          `SELECT id, name, username, email, role, is_active, phone_number
-           FROM users WHERE LOWER(email) = LOWER($1) LIMIT 1`,
-          [email],
-        );
-        user = result.rows[0];
-      }
-      if (!user && phoneNumber) {
-        result = await pool.query(
-          `SELECT id, name, username, email, role, is_active, phone_number
-           FROM users WHERE phone_number = $1 LIMIT 1`,
-          [phoneNumber],
-        );
-        user = result.rows[0];
-      }
-    }
-
-    if (user) {
-      // Link firebase_uid to the existing account if not already linked
-      await pool.query(
-        `UPDATE users
-         SET firebase_uid = $1, auth_provider = $2
-         WHERE id = $3`,
-        [firebaseUid, provider, user.id],
-      );
-    } else {
-      // Brand-new user — create with the requested role.
-      // NOTE: consider requiring admin approval for new roles in production.
-      const insertResult = await pool.query(
-        `INSERT INTO users
-           (name, email, phone_number, role, is_active, firebase_uid, auth_provider)
-         VALUES ($1, $2, $3, $4, TRUE, $5, $6)
-         RETURNING id, name, username, email, role, is_active, phone_number`,
-        [name, email, phoneNumber, role, firebaseUid, provider],
-      );
-      user = insertResult.rows[0];
-    }
-
-    if (!user.is_active) {
-      return res.status(403).json({
-        success: false,
-        message: 'User account is inactive',
-      });
-    }
-
-    const token = jwt.sign(
-      { userId: user.id, role: user.role },
-      getJwtSecret(),
-      { expiresIn: process.env.JWT_EXPIRES_IN || '7d' },
-    );
-
-    return res.status(200).json({
-      success: true,
-      message: 'Login successful',
-      token,
-      user: {
-        id: user.id,
-        name: user.name,
-        username: user.username,
-        email: user.email,
-        phoneNumber: user.phone_number,
-        role: user.role,
-        isActive: user.is_active,
-      },
-    });
-  } catch (error) {
-    console.error('Social login error:', error);
     return res.status(500).json({
       success: false,
       message: 'Server error',

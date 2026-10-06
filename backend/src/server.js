@@ -12,6 +12,11 @@ dotenv.config();
 
 const app = express();
 
+const jwtSecret = process.env.JWT_SECRET;
+if (!jwtSecret || jwtSecret.length < 32 || jwtSecret === 'replace_with_a_long_random_secret' || jwtSecret.includes('YOUR_JWT_SECRET')) {
+  throw new Error('FATAL: JWT_SECRET must be configured, at least 32 characters, and not use a placeholder.');
+}
+
 const PORT = Number(process.env.PORT) || 5000;
 
 const partiesRouter = require('./parties');
@@ -251,6 +256,27 @@ app.post('/api/admin/restore', authRouter.authenticate, authorizeRoles('admin'),
   }
 });
 
+app.get('/api/parties/lookup', authRouter.authenticate, authorizeRoles('admin', 'accountant', 'rice/wheat manager'), async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT id, name, phone, party_type
+       FROM parties
+       WHERE is_active = TRUE
+       ORDER BY name ASC`,
+    );
+    return res.status(200).json({
+      success: true,
+      parties: result.rows,
+    });
+  } catch (error) {
+    console.error('Get parties lookup error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to fetch party lookup list',
+    });
+  }
+});
+
 app.use('/api/parties', authRouter.authenticate, authorizeRoles('admin', 'accountant'), partiesRouter);
 app.use('/api/khata', authRouter.authenticate, authorizeRoles('admin', 'accountant'), khataRouter);
 app.use('/api/farmers', authRouter.authenticate, authorizeRoles('admin', 'farm manager'), farmersRouter);
@@ -264,6 +290,117 @@ app.use(
   authorizeRoles('admin', 'accountant'),
   accountsRouter
 );
+
+// -----------------------------------------------------------------------------
+// ROLE-AWARE AGGREGATE SUMMARY ENDPOINTS
+// -----------------------------------------------------------------------------
+
+app.get('/api/dashboard/summary', authRouter.authenticate, async (req, res) => {
+  try {
+    const role = (req.user?.role || '').toLowerCase();
+    const isAdmin = role === 'admin';
+    const isFarm = isAdmin || role === 'farm manager';
+    const isCrop = isAdmin || role === 'rice/wheat manager';
+    const isAccountant = isAdmin || role === 'accountant';
+
+    const summary = {
+      role: req.user?.role,
+    };
+
+    if (isFarm) {
+      const farmsRes = await pool.query(
+        `SELECT COUNT(*)::int AS count, COALESCE(SUM(area), 0)::numeric(12,2) AS total_area FROM farms WHERE is_active = TRUE`
+      );
+      summary.farms = {
+        count: farmsRes.rows[0].count,
+        totalArea: Number(farmsRes.rows[0].total_area),
+      };
+    }
+
+    if (isCrop) {
+      const riceRes = await pool.query(`
+        SELECT
+          COALESCE(SUM(CASE WHEN transaction_type = 'purchase' THEN quantity ELSE 0 END), 0)::numeric(12,2) AS purchase_qty,
+          COALESCE(SUM(CASE WHEN transaction_type = 'sale' THEN quantity ELSE 0 END), 0)::numeric(12,2) AS sale_qty,
+          COALESCE(SUM(CASE WHEN transaction_type = 'purchase' THEN total_amount ELSE 0 END), 0)::numeric(14,2) AS purchase_amount,
+          COALESCE(SUM(CASE WHEN transaction_type = 'sale' THEN total_amount ELSE 0 END), 0)::numeric(14,2) AS sale_amount
+        FROM rice_transactions
+      `);
+      const wheatRes = await pool.query(`
+        SELECT
+          COALESCE(SUM(CASE WHEN transaction_type = 'purchase' THEN quantity ELSE 0 END), 0)::numeric(12,2) AS purchase_qty,
+          COALESCE(SUM(CASE WHEN transaction_type = 'sale' THEN quantity ELSE 0 END), 0)::numeric(12,2) AS sale_qty,
+          COALESCE(SUM(CASE WHEN transaction_type = 'purchase' THEN total_amount ELSE 0 END), 0)::numeric(14,2) AS purchase_amount,
+          COALESCE(SUM(CASE WHEN transaction_type = 'sale' THEN total_amount ELSE 0 END), 0)::numeric(14,2) AS sale_amount
+        FROM wheat_transactions
+      `);
+      summary.crops = {
+        rice: {
+          purchaseQty: Number(riceRes.rows[0].purchase_qty),
+          saleQty: Number(riceRes.rows[0].sale_qty),
+          purchaseAmount: Number(riceRes.rows[0].purchase_amount),
+          saleAmount: Number(riceRes.rows[0].sale_amount),
+        },
+        wheat: {
+          purchaseQty: Number(wheatRes.rows[0].purchase_qty),
+          saleQty: Number(wheatRes.rows[0].sale_qty),
+          purchaseAmount: Number(wheatRes.rows[0].purchase_amount),
+          saleAmount: Number(wheatRes.rows[0].sale_amount),
+        },
+      };
+    }
+
+    if (isFarm || isCrop) {
+      const stockRes = await pool.query(`
+        SELECT
+          COALESCE(SUM(CASE WHEN LOWER(product_name) LIKE '%rice%' THEN quantity ELSE 0 END), 0)::numeric(12,2) AS rice_stock,
+          COALESCE(SUM(CASE WHEN LOWER(product_name) LIKE '%wheat%' THEN quantity ELSE 0 END), 0)::numeric(12,2) AS wheat_stock,
+          COALESCE(SUM(total_value), 0)::numeric(14,2) AS total_value
+        FROM stock
+        WHERE is_active = TRUE
+      `);
+      summary.stock = {
+        riceStock: Number(stockRes.rows[0].rice_stock),
+        wheatStock: Number(stockRes.rows[0].wheat_stock),
+        totalValue: Number(stockRes.rows[0].total_value),
+      };
+    }
+
+    if (isAccountant) {
+      const partiesRes = await pool.query(`
+        SELECT
+          COUNT(*)::int AS count,
+          COALESCE(SUM(CASE WHEN opening_balance_type IN ('You Give', 'debit') THEN opening_balance ELSE 0 END), 0)::numeric(14,2) AS opening_receivable,
+          COALESCE(SUM(CASE WHEN opening_balance_type IN ('You Take', 'You Receive', 'credit') THEN opening_balance ELSE 0 END), 0)::numeric(14,2) AS opening_payable
+        FROM parties
+        WHERE is_active = TRUE
+      `);
+      const accountsRes = await pool.query(`
+        SELECT
+          COUNT(*)::int AS count,
+          COALESCE(SUM(current_balance), 0)::numeric(14,2) AS total_balance
+        FROM accounts
+        WHERE is_active = TRUE
+      `);
+      summary.accounts = {
+        partiesCount: partiesRes.rows[0].count,
+        accountsCount: accountsRes.rows[0].count,
+        totalAccountBalance: Number(accountsRes.rows[0].total_balance),
+      };
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: summary,
+    });
+  } catch (err) {
+    console.error('Dashboard summary error:', err);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to load dashboard summary',
+    });
+  }
+});
 
 
 // -----------------------------------------------------------------------------

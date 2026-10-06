@@ -2,8 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
+import 'package:provider/provider.dart';
 
+import '../core/security/role_permissions.dart';
 import '../core/utils/csv_exporter.dart';
+import '../providers/auth_provider.dart';
 import '../repositories/report_repository.dart';
 import '../widgets/responsive_card_row.dart';
 
@@ -55,33 +58,46 @@ class _ReportsPageState extends State<ReportsPage> {
   // =====================================================
 
   Future<void> loadReportData() async {
-    try {
-      final reportRepository = ReportRepository();
-      final loadedTransactions =
-          await reportRepository.getAccountTransactions();
-      final loadedParties =
-          (await reportRepository.getParties())
-              .map((party) => party.toJson())
-              .toList();
+    final auth = context.read<AuthProvider>();
+    final role = auth.currentUser?.role ?? 'Admin';
+    final canAccounts = RolePermissions.canManageAccounts(role);
+    final canParties = RolePermissions.canManageParties(role);
 
-      if (!mounted) return;
+    final reportRepository = ReportRepository();
+    final loadedTransactions = <Map<String, dynamic>>[];
+    final loadedParties = <Map<String, dynamic>>[];
 
-      setState(() {
-        transactions
-          ..clear()
-          ..addAll(loadedTransactions);
-        parties
-          ..clear()
-          ..addAll(loadedParties);
-        isLoading = false;
-      });
-    } catch (e) {
-      if (!mounted) return;
-      setState(() => isLoading = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to load report data: $e')),
-      );
+    if (canAccounts) {
+      try {
+        final txs = await reportRepository.getAccountTransactions();
+        loadedTransactions.addAll(txs);
+      } catch (e) {
+        debugPrint('Reports account transactions error: $e');
+      }
     }
+
+    if (canParties) {
+      try {
+        final pts = (await reportRepository.getParties())
+            .map((party) => party.toJson())
+            .toList();
+        loadedParties.addAll(pts);
+      } catch (e) {
+        debugPrint('Reports parties error: $e');
+      }
+    }
+
+    if (!mounted) return;
+
+    setState(() {
+      transactions
+        ..clear()
+        ..addAll(loadedTransactions);
+      parties
+        ..clear()
+        ..addAll(loadedParties);
+      isLoading = false;
+    });
   }
 
   // =====================================================
