@@ -13,22 +13,22 @@
   - [x] 1.8 Verify clean pubspec, android/ios firebase removal
   - [x] 1.9 Pass `flutter analyze` (0 errors) & build web test
 
-- [ ] **Phase 2: Backend Clean-Up & Security**
-  - [ ] 2.1 Deduplicate dotenv & clean server.js
-  - [ ] 2.2 Secrets hygiene (docker-compose.yml, rotate JWT_SECRET silently, check history)
-  - [ ] 2.3 Authentication hardening (DB role check, logout endpoint, password rate limit + current password check, canonical role, limiter leak fix, empty req.body handling)
-  - [ ] 2.4 Central error handling (Postgres error codes mapping)
-  - [ ] 2.5 Consistent response shape & pagination/limits
-  - [ ] 2.6 Backup/restore verification (schema match, 20MB limit, roundtrip test)
-  - [ ] 2.7 Remove backup/stray scripts and empty folders
-  - [ ] 2.8 Security headers & Cache-Control: no-store on /api/*
-  - [ ] 2.9 Dashboard summary Flutter consumption preparation
+- [x] **Phase 2: Backend Clean-Up & Security**
+  - [x] 2.1 Deduplicate dotenv & clean server.js
+  - [x] 2.2 Secrets hygiene (docker-compose.yml, rotate JWT_SECRET silently, check history)
+  - [x] 2.3 Authentication hardening (DB role check, logout endpoint, password rate limit + current password check, canonical role, limiter leak fix, empty req.body handling)
+  - [x] 2.4 Central error handling (Postgres error codes mapping)
+  - [x] 2.5 Consistent response shape & pagination/limits
+  - [x] 2.6 Backup/restore verification (schema match, 20MB limit, roundtrip test)
+  - [x] 2.7 Remove backup/stray scripts and empty folders
+  - [x] 2.8 Security headers & Cache-Control: no-store on /api/*
+  - [x] 2.9 Dashboard summary Flutter consumption preparation
 
-- [ ] **Phase 3: Database Migrations & Integrity**
-  - [ ] 3.1 Migration `004_*.sql` (stock updated_at, set_updated_at triggers, username unique, role check, last_login_at, khata source_type/id, crop stock_id, validate constraints)
-  - [ ] 3.2 Lowercase transaction_type normalization
-  - [ ] 3.3 Health endpoint schema version check
-  - [ ] 3.4 Non-interactive `seed_user.js`
+- [x] **Phase 3: Database Migrations & Integrity**
+  - [x] 3.1 Migration `004_*.sql` (stock updated_at, set_updated_at triggers, username unique, role check, last_login_at, khata source_type/id, crop stock_id, validate constraints)
+  - [x] 3.2 Lowercase transaction_type normalization
+  - [x] 3.3 Health endpoint schema version check
+  - [x] 3.4 Non-interactive `seed_user.js`
 
 - [ ] **Phase 4: Complete Missing Business Logic**
   - [ ] 4.1 Rice & Wheat Stock Integration + extract shared crop router

@@ -241,8 +241,8 @@ class _LoginPageState extends State<LoginPage> {
                                   enabled: !isAuthenticating,
                                   textInputAction: TextInputAction.next,
                                   decoration: InputDecoration(
-                                    labelText: 'Username',
-                                    hintText: 'Enter username',
+                                    labelText: 'Username or Email',
+                                    hintText: 'Enter username or email',
                                     prefixIcon: const Icon(
                                       Icons.person_outline,
                                     ),
@@ -252,7 +252,7 @@ class _LoginPageState extends State<LoginPage> {
                                   ),
                                   validator: (value) {
                                     if (value == null || value.trim().isEmpty) {
-                                      return 'Please enter username';
+                                      return 'Please enter username or email';
                                     }
 
                                     return null;

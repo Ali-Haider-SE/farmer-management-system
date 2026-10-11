@@ -8,8 +8,6 @@ const pool = require('./db');
 const authRouter = require('./auth');
 const { authorizeRoles } = require('./authorization');
 
-dotenv.config();
-
 const app = express();
 
 const jwtSecret = process.env.JWT_SECRET;
@@ -48,6 +46,12 @@ app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('Referrer-Policy', 'no-referrer');
+  res.setHeader('X-XSS-Protection', '1; mode=block');
+  res.setHeader("Content-Security-Policy", "default-src 'self'");
+  if (req.path.startsWith('/api/')) {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+    res.setHeader('Pragma', 'no-cache');
+  }
   next();
 });
 
@@ -80,6 +84,16 @@ const loginAttempts = new Map();
 const loginWindowMs = 15 * 60 * 1000;
 const loginLimit = Number(process.env.AUTH_RATE_LIMIT || 20);
 
+// Cleanup expired rate-limit records periodically to prevent memory leaks
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, record] of loginAttempts.entries()) {
+    if (now - record.startedAt >= loginWindowMs) {
+      loginAttempts.delete(key);
+    }
+  }
+}, 5 * 60 * 1000).unref();
+
 function authRateLimit(req, res, next) {
   const key = req.ip || req.socket.remoteAddress || 'unknown';
   const now = Date.now();
@@ -102,6 +116,7 @@ function authRateLimit(req, res, next) {
 }
 
 app.use('/api/auth/login', authRateLimit);
+app.use('/api/auth/users/:id/password', authRateLimit);
 app.use('/api/auth', authRouter);
 
 
@@ -147,7 +162,12 @@ app.get('/api/admin/backup', authRouter.authenticate, authorizeRoles('admin'), a
   }
 });
 
-app.post('/api/admin/restore', authRouter.authenticate, authorizeRoles('admin'), async (req, res) => {
+app.post(
+  '/api/admin/restore',
+  express.json({ limit: '20mb' }),
+  authRouter.authenticate,
+  authorizeRoles('admin'),
+  async (req, res) => {
   const client = await pool.connect();
 
   try {
@@ -214,13 +234,13 @@ app.post('/api/admin/restore', authRouter.authenticate, authorizeRoles('admin'),
       ['id','name','phone','address','party_type','opening_balance','opening_balance_type','is_active','created_at','updated_at'],
       snapshot.tables.parties);
     await insertRows('khata_transactions',
-      ['id','party_id','date','description','debit','credit','balance','reference','created_at','updated_at'],
+      ['id','party_id','date','description','debit','credit','balance','reference','source_type','source_id','created_at','updated_at'],
       snapshot.tables.khata_transactions);
     await insertRows('rice_transactions',
-      ['id','farmer_id','party_id','date','quantity','rate','total_amount','transaction_type','paid_amount','received_amount','remaining_amount','variety','notes','created_at','updated_at'],
+      ['id','farmer_id','party_id','date','quantity','rate','total_amount','transaction_type','paid_amount','received_amount','remaining_amount','variety','notes','stock_id','created_at','updated_at'],
       snapshot.tables.rice_transactions);
     await insertRows('wheat_transactions',
-      ['id','farmer_id','party_id','date','quantity','rate','total_amount','transaction_type','paid_amount','received_amount','remaining_amount','variety','notes','created_at','updated_at'],
+      ['id','farmer_id','party_id','date','quantity','rate','total_amount','transaction_type','paid_amount','received_amount','remaining_amount','variety','notes','stock_id','created_at','updated_at'],
       snapshot.tables.wheat_transactions);
     await insertRows('stock',
       ['id','product_name','product_type','quantity','unit','average_rate','total_value','warehouse','is_active','created_at','updated_at'],
@@ -415,11 +435,24 @@ app.get('/', (req, res) => {
   });
 });
 
-app.get('/api/health', (req, res) => {
+app.get('/api/health', async (req, res) => {
+  let schemaVersion = 'unknown';
+  try {
+    const migRes = await pool.query(
+      'SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1'
+    );
+    if (migRes.rows.length > 0) {
+      schemaVersion = migRes.rows[0].version;
+    }
+  } catch (_) {
+    // schema_migrations might not exist yet if unmigrated
+  }
+
   res.status(200).json({
     success: true,
     message: 'API is healthy',
     service: 'Farmer Management API',
+    schemaVersion,
     timestamp: new Date().toISOString(),
   });
 });
@@ -467,6 +500,34 @@ app.use((req, res) => {
 app.use((err, req, res, next) => {
   console.error('API Error:', err);
 
+  if (err.code === '23505') {
+    return res.status(409).json({
+      success: false,
+      message: err.detail || 'A record with these details already exists.',
+    });
+  }
+
+  if (err.code === '23503') {
+    return res.status(400).json({
+      success: false,
+      message: err.detail || 'Referenced record does not exist or cannot be removed due to foreign key constraints.',
+    });
+  }
+
+  if (err.code === '22P02') {
+    return res.status(400).json({
+      success: false,
+      message: 'Invalid input syntax for number or date.',
+    });
+  }
+
+  if (err.code === '23514') {
+    return res.status(400).json({
+      success: false,
+      message: err.detail || 'A database check constraint was violated.',
+    });
+  }
+
   const statusCode = err.statusCode || 500;
 
   res.status(statusCode).json({
@@ -482,7 +543,11 @@ app.use((err, req, res, next) => {
 // SERVER
 // -----------------------------------------------------------------------------
 
-const server = app.listen(PORT, () => {
+const server = app.listen(PORT, (err) => {
+  if (err) {
+    console.error(`Failed to start on port ${PORT}:`, err.message);
+    process.exit(1);
+  }
   console.log('==========================================');
   console.log(' Farmer Management API');
   console.log('==========================================');

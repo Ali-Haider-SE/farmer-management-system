@@ -23,13 +23,24 @@ function getJwtSecret() {
   return secret;
 }
 
+const revokedTokens = new Set();
+
+function revokeToken(token) {
+  if (token) revokedTokens.add(token);
+}
+
+// Periodically clean up revoked tokens (keep last 50,000 max)
+if (revokedTokens.size > 50000) {
+  revokedTokens.clear();
+}
+
 /**
  * JWT authentication middleware.
  *
  * Reads:
  * Authorization: Bearer <token>
  */
-function authenticate(req, res, next) {
+async function authenticate(req, res, next) {
   try {
     const authHeader = req.headers.authorization || '';
 
@@ -49,9 +60,33 @@ function authenticate(req, res, next) {
       });
     }
 
+    if (revokedTokens.has(token)) {
+      return res.status(401).json({
+        success: false,
+        message: 'Authentication token has been revoked',
+      });
+    }
+
     const decoded = jwt.verify(token, getJwtSecret());
 
-    req.user = decoded;
+    // Verify user still exists, is active, and fetch current canonical role
+    const userRes = await pool.query(
+      'SELECT id, role, is_active FROM users WHERE id = $1 LIMIT 1',
+      [decoded.userId],
+    );
+
+    if (userRes.rows.length === 0 || !userRes.rows[0].is_active) {
+      return res.status(401).json({
+        success: false,
+        message: 'User account is inactive or no longer exists',
+      });
+    }
+
+    req.user = {
+      ...decoded,
+      token,
+      role: userRes.rows[0].role, // Fresh canonical role from DB
+    };
 
     next();
   } catch (error) {
@@ -101,7 +136,7 @@ router.post('/login', async (req, res) => {
          role,
          is_active
        FROM users
-       WHERE LOWER(username) = LOWER($1)
+       WHERE (LOWER(username) = LOWER($1) OR LOWER(email) = LOWER($1))
        LIMIT 1`,
       [username],
     );
@@ -168,7 +203,7 @@ router.post('/login', async (req, res) => {
         isActive: user.is_active,
       },
     });
- } catch (error) {
+  } catch (error) {
     console.error('Login error:', error);
 
     return res.status(500).json({
@@ -266,6 +301,23 @@ router.put('/users/:id/password', authenticate, async (req, res) => {
       });
     }
 
+    // If changing own password and not admin override, verify currentPassword
+    if (requesterId === targetId && req.body.currentPassword) {
+      const userRes = await pool.query('SELECT password_hash FROM users WHERE id = $1', [targetId]);
+      if (userRes.rows.length === 0) {
+        return res.status(404).json({ success: false, message: 'User not found' });
+      }
+      const isCurrentValid = await bcrypt.compare(String(req.body.currentPassword), userRes.rows[0].password_hash);
+      if (!isCurrentValid) {
+        return res.status(400).json({ success: false, message: 'Current password is incorrect' });
+      }
+    } else if (requesterId === targetId && String(req.user.role).toLowerCase() !== 'admin') {
+      return res.status(400).json({
+        success: false,
+        message: 'Current password is required',
+      });
+    }
+
     const passwordHash = await bcrypt.hash(newPassword, 12);
 
     const result = await pool.query(
@@ -298,10 +350,21 @@ router.put('/users/:id/password', authenticate, async (req, res) => {
   }
 });
 
+router.post('/logout', authenticate, (req, res) => {
+  if (req.user && req.user.token) {
+    revokeToken(req.user.token);
+  }
+  return res.json({
+    success: true,
+    message: 'Logged out successfully',
+  });
+});
+
 /**
- * Export middleware as a property so it can be reused
+ * Export middleware and helpers so they can be reused
  * by other backend route files later.
  */
 router.authenticate = authenticate;
+router.revokeToken = revokeToken;
 
 module.exports = router;
